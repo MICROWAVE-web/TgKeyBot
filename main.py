@@ -45,7 +45,7 @@ def get_users():
 
 
 def get_keyboard():
-    bthurl = InlineKeyboardButton(text="Канал", url='https://t.me/instaponos')
+    bthurl = InlineKeyboardButton(text="Канал", url=f'https://t.me/{CHANNEL[1:]}')
     bthsub = InlineKeyboardButton(text="Проверить подписку", callback_data="subchennel")
 
     checksubmenu = InlineKeyboardMarkup(inline_keyboard=[[bthurl, bthsub]], resize_keyboard=True)
@@ -66,6 +66,17 @@ def save_keys(keys):
 @dp.callback_query(F.data == 'subchennel')
 @dp.message(CommandStart())
 async def check_subscribe(message: types.Message):
+    users = get_users()
+    if str(message.from_user.id) not in users:
+        await bot.send_message(message.from_user.id,
+                               '''
+👋 Привет, старина! Я РобоГабен, щедрый бот, который раздает ключи от игр Steam совершенно бесплатно каждые 2 недели. 
+
+▫️Для получения ключей, нужно быть подписанным на Халявный Steam (http://t.me/SteamByFree) 🎮
+
+▫️Мой создатель: Cын Габена  (http://t.me/gabenson)
+▫️По техническим вопросам, обращайтесь: @sh33shka                               
+                               ''')
     # Проверка подписки на канал
     current_time = time.time()
     try:
@@ -82,8 +93,6 @@ async def check_subscribe(message: types.Message):
         return
     else:
         await bot.send_message(message.from_user.id, 'Вы подписаны на канал!')
-
-    users = get_users()
 
     # Проверка времени последнего получения ключа
     if str(message.from_user.id) in users:
