@@ -112,20 +112,15 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
 ▫️Мой создатель: Cын Габена  (http://t.me/gabenson)
 ▫️По техническим вопросам, обращайтесь: @sh33shka                               
                                ''')
-        referal = ""
         # Проверка реферала
         if command and command.args:
             reference = str(decode_payload(command.args))
             if reference != str(message.from_user.id) and ('last_ref_time' not in users[reference] or current_time - users[reference][
             'last_ref_time'] >= 1209600):
-                referal = reference
                 await message.answer(f"Ваш реферал *{reference}*", parse_mode='Markdown')
                 await send_key(int(reference), from_ref=True)
                 users[reference]['last_ref_time'] = current_time
 
-        users[str(message.from_user.id)] = {
-            'referal': referal
-        }
         save_user_data(users)
 
     # Проверка подписки на канал
