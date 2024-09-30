@@ -77,6 +77,13 @@ async def get_ref(message: types.Message):
 
 async def send_key(user_id, from_ref=False):
     keys = get_keys()
+    lkeys = len(keys)
+    if lkeys <= int(config('KEYS_LEN_ALERT')):
+        for admin in admins:
+            try:
+                await bot.send_message(int(admin), f'Внимание, осталось мало ключей: {lkeys}')
+            except TelegramBadRequest:
+                logging.warning('Telegram Bad Request')
     if keys:
         key = random.choice(keys)
         keys.remove(key)
@@ -93,7 +100,6 @@ async def send_key(user_id, from_ref=False):
 @dp.callback_query(F.data == 'subchennel')
 @dp.message(CommandStart())
 async def check_subscribe(message: types.Message, command: CommandObject = None):
-
     users = get_users()
     if str(message.from_user.id) not in users:
         await bot.send_message(message.from_user.id,
@@ -119,7 +125,6 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
         }
         save_user_data(users)
 
-
     # Проверка подписки на канал
     current_time = time.time()
     try:
@@ -140,7 +145,8 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
 
     # Проверка времени последнего получения ключа
     if str(message.from_user.id) in users:
-        if 'last_key_time' in users[str(message.from_user.id)] and current_time - users[str(message.from_user.id)]['last_key_time'] < 1209600:  # 2 недели в секундах
+        if 'last_key_time' in users[str(message.from_user.id)] and current_time - users[str(message.from_user.id)][
+            'last_key_time'] < 1209600:  # 2 недели в секундах
             await bot.send_message(message.from_user.id, 'Вы можете получить следующий ключ через 2 недели.')
             return
 
