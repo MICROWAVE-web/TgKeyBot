@@ -146,8 +146,7 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
             users[str(message.from_user.id)]['referal'] = ""
         else:
             referal = users[str(message.from_user.id)]['referal']
-            if referal != "" and referal.isdigit() and (
-                    'last_ref_time' not in users[referal] or current_time - users[referal]['last_ref_time'] >= 1209600):
+            if referal != "" and referal.isdigit() and ('last_ref_time' not in users[referal] or current_time - users[referal]['last_ref_time'] >= 1):
                 await send_key(int(referal), from_ref=True)
                 users[referal]['last_ref_time'] = current_time
 
