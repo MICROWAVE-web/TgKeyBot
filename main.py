@@ -8,8 +8,10 @@ import time
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandStart
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.filters import CommandStart, CommandObject
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils.deep_linking import create_start_link
+from aiogram.utils.payload import decode_payload
 from decouple import config
 
 API_TOKEN = config('API_TOKEN')
@@ -44,12 +46,15 @@ def get_users():
     return user_data
 
 
-def get_keyboard():
+def get_keyboard(only_ref=False):
+    if only_ref:
+        bthref = KeyboardButton(text="Моя реферальная ссылка")
+        return ReplyKeyboardMarkup(keyboard=[[bthref]], resize_keyboard=True)
+
     bthurl = InlineKeyboardButton(text="Канал", url=f'https://t.me/{CHANNEL[1:]}')
     bthsub = InlineKeyboardButton(text="Проверить подписку", callback_data="subchennel")
 
-    checksubmenu = InlineKeyboardMarkup(inline_keyboard=[[bthurl, bthsub]], resize_keyboard=True)
-    return checksubmenu
+    return InlineKeyboardMarkup(inline_keyboard=[[bthurl, bthsub]], resize_keyboard=True)
 
 
 def save_user_data(user_data):
@@ -63,9 +68,32 @@ def save_keys(keys):
         file.write('\n'.join(keys))
 
 
+# хендлер для создания ссылок
+@dp.message(F.text.startswith("Моя реферальная ссылка"))
+async def get_ref(message: types.Message):
+    link = await create_start_link(bot, str(message.from_user.id), encode=True)
+    await bot.send_message(message.from_user.id, f"Ваша реф. ссылка {link}")
+
+
+async def send_key(user_id, from_ref=False):
+    keys = get_keys()
+    if keys:
+        key = random.choice(keys)
+        keys.remove(key)
+        save_keys(keys)
+        if from_ref:
+            await bot.send_message(user_id, f'Ура, по реферальной ссылке перешли, держи подарок 🎁')
+        await bot.send_message(user_id, f'Ваш ключ: {key}')
+        return True
+    else:
+        await bot.send_message(user_id, 'Ключи закончились.')
+        return False
+
+
 @dp.callback_query(F.data == 'subchennel')
 @dp.message(CommandStart())
-async def check_subscribe(message: types.Message):
+async def check_subscribe(message: types.Message, command: CommandObject = None):
+
     users = get_users()
     if str(message.from_user.id) not in users:
         await bot.send_message(message.from_user.id,
@@ -77,6 +105,21 @@ async def check_subscribe(message: types.Message):
 ▫️Мой создатель: Cын Габена  (http://t.me/gabenson)
 ▫️По техническим вопросам, обращайтесь: @sh33shka                               
                                ''')
+        referal = ""
+        # Проверка реферала
+        if command and command.args:
+            reference = str(decode_payload(command.args))
+            if reference != str(message.from_user.id):
+                referal = reference
+                await message.answer(f"Ваш реферал *{reference}*", parse_mode='Markdown')
+                await send_key(int(reference), from_ref=True)
+
+        users[str(message.from_user.id)] = {
+            'referal': referal
+        }
+        save_user_data(users)
+
+
     # Проверка подписки на канал
     current_time = time.time()
     try:
@@ -92,28 +135,23 @@ async def check_subscribe(message: types.Message):
                                reply_markup=get_keyboard())
         return
     else:
-        await bot.send_message(message.from_user.id, 'Вы подписаны на канал!')
+        await bot.send_message(message.from_user.id, 'Вы подписаны на канал!',
+                               reply_markup=get_keyboard(only_ref=True))
 
     # Проверка времени последнего получения ключа
     if str(message.from_user.id) in users:
-        if current_time - users[str(message.from_user.id)][
-            'last_key_time'] < 1209600:  # 2 недели в секундах
+        if 'last_key_time' in users[str(message.from_user.id)] and current_time - users[str(message.from_user.id)]['last_key_time'] < 1209600:  # 2 недели в секундах
             await bot.send_message(message.from_user.id, 'Вы можете получить следующий ключ через 2 недели.')
             return
-    current_time = time.time()
 
-    keys = get_keys()
-
+    sended = await send_key(message.from_user.id)
     # Выдача ключа
-    if keys:
-        key = random.choice(keys)
-        keys.remove(key)
-        save_keys(keys)
-        users[str(message.from_user.id)] = {'last_key_time': current_time}
+
+    if sended is True:
+        users[str(message.from_user.id)] = {
+            'last_key_time': current_time
+        }
         save_user_data(users)
-        await bot.send_message(message.from_user.id, f'Ваш ключ: {key}')
-    else:
-        await bot.send_message(message.from_user.id, 'Ключи закончились.')
 
 
 @dp.message(F.document)
