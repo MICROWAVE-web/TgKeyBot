@@ -101,6 +101,7 @@ async def send_key(user_id, from_ref=False):
 @dp.message(CommandStart())
 async def check_subscribe(message: types.Message, command: CommandObject = None):
     users = get_users()
+    current_time = time.time()
     if str(message.from_user.id) not in users:
         await bot.send_message(message.from_user.id,
                                '''
@@ -115,10 +116,12 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
         # Проверка реферала
         if command and command.args:
             reference = str(decode_payload(command.args))
-            if reference != str(message.from_user.id):
+            if reference != str(message.from_user.id) and ('last_ref_time' not in users[reference] or current_time - users[reference][
+            'last_ref_time'] >= 1209600):
                 referal = reference
                 await message.answer(f"Ваш реферал *{reference}*", parse_mode='Markdown')
                 await send_key(int(reference), from_ref=True)
+                users[reference]['last_ref_time'] = current_time
 
         users[str(message.from_user.id)] = {
             'referal': referal
@@ -126,7 +129,7 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
         save_user_data(users)
 
     # Проверка подписки на канал
-    current_time = time.time()
+
     try:
         chat_member = await bot.get_chat_member(chat_id=CHANNEL, user_id=message.from_user.id)
     except TelegramBadRequest:
