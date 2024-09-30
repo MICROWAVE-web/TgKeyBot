@@ -58,7 +58,6 @@ def get_keyboard(only_ref=False):
 
 
 def save_user_data(user_data):
-    print(user_data)
     with open('users.json', 'w') as file:
         json.dump(user_data, file)
 
@@ -112,15 +111,16 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
 ▫️Мой создатель: Cын Габена  (http://t.me/gabenson)
 ▫️По техническим вопросам, обращайтесь: @sh33shka                               
                                ''')
+        referal = ""
         # Проверка реферала
         if command and command.args:
             reference = str(decode_payload(command.args))
-            if reference != str(message.from_user.id) and ('last_ref_time' not in users[reference] or current_time - users[reference][
-            'last_ref_time'] >= 1209600):
-                await message.answer(f"Ваш реферал *{reference}*", parse_mode='Markdown')
-                await send_key(int(reference), from_ref=True)
-                users[reference]['last_ref_time'] = current_time
+            if reference != str(message.from_user.id):
+                referal = reference
 
+        users[str(message.from_user.id)] = {
+            'referal': referal
+        }
         save_user_data(users)
 
     # Проверка подписки на канал
@@ -140,6 +140,11 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
     else:
         await bot.send_message(message.from_user.id, 'Вы подписаны на канал!',
                                reply_markup=get_keyboard(only_ref=True))
+        referal = users[str(message.from_user.id)]['referal']
+        if referal != "" and referal.isdigit() and (
+                'last_ref_time' not in users[referal] or current_time - users[referal]['last_ref_time'] >= 1209600):
+            await send_key(int(referal), from_ref=True)
+            users[referal]['last_ref_time'] = current_time
 
     # Проверка времени последнего получения ключа
     if str(message.from_user.id) in users:
@@ -152,9 +157,7 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
     # Выдача ключа
 
     if sended is True:
-        users[str(message.from_user.id)] = {
-            'last_key_time': current_time
-        }
+        users[str(message.from_user.id)]['last_key_time'] = current_time
         save_user_data(users)
 
 
