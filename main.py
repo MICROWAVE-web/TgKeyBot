@@ -144,11 +144,14 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
                                reply_markup=get_keyboard(only_ref=True))
         if 'referal' not in users[str(message.from_user.id)]:
             users[str(message.from_user.id)]['referal'] = ""
+            save_user_data(users)
         else:
             referal = users[str(message.from_user.id)]['referal']
             if referal != "" and referal.isdigit() and ('last_ref_time' not in users[referal] or current_time - users[referal]['last_ref_time'] >= 1):
                 await send_key(int(referal), from_ref=True)
+                users[str(message.from_user.id)]['referal'] = ""
                 users[referal]['last_ref_time'] = current_time
+                save_user_data(users)
 
     # Проверка времени последнего получения ключа
     if str(message.from_user.id) in users:
