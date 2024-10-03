@@ -15,7 +15,7 @@ from aiogram.utils.payload import decode_payload
 from decouple import config
 
 API_TOKEN = config('API_TOKEN')
-CHANNEL = config('CHANNEL')
+CHANNELS = config('CHANNELS').split(',')
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
@@ -50,11 +50,13 @@ def get_keyboard(only_ref=False):
     if only_ref:
         bthref = KeyboardButton(text="Моя реферальная ссылка")
         return ReplyKeyboardMarkup(keyboard=[[bthref]], resize_keyboard=True)
+    kbrd = [[
+        *[InlineKeyboardButton(text=f"Канал {ind}", url=f'https://t.me/{channel[1:]}') for ind, channel in
+        enumerate(CHANNELS, start=1)],
+         InlineKeyboardButton(text="Проверить подписку", callback_data="subchennel")
+    ]]
 
-    bthurl = InlineKeyboardButton(text="Канал", url=f'https://t.me/{CHANNEL[1:]}')
-    bthsub = InlineKeyboardButton(text="Проверить подписку", callback_data="subchennel")
-
-    return InlineKeyboardMarkup(inline_keyboard=[[bthurl, bthsub]], resize_keyboard=True)
+    return InlineKeyboardMarkup(inline_keyboard=kbrd, resize_keyboard=True)
 
 
 def save_user_data(user_data):
@@ -107,6 +109,7 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
 👋 Привет, старина! Я РобоГабен, щедрый бот, который раздает ключи от игр Steam совершенно бесплатно каждые 2 недели. 
 
 ▫️Для получения ключей, нужно быть подписанным на Халявный Steam (http://t.me/SteamByFree) 🎮
+▫️А также, нужно быть подписанным на Сын Габена (http://t.me/gabenson) 🎮
 
 ▫️Мой создатель: Cын Габена  (http://t.me/gabenson)
 ▫️По техническим вопросам, обращайтесь: @sh33shka
@@ -128,26 +131,32 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
     # Проверка подписки на канал
 
     try:
-        chat_member = await bot.get_chat_member(chat_id=CHANNEL, user_id=message.from_user.id)
+        all_in = True
+        for channel in CHANNELS:
+            chat_member = await bot.get_chat_member(chat_id=channel, user_id=message.from_user.id)
+            if chat_member.status not in ['member', 'administrator', 'creator']:
+                all_in = False
+                break
     except TelegramBadRequest:
         logging.error("Бот не состоит в канале!")
         await bot.send_message(message.from_user.id, 'Произошла ошибка, попробуйте позже')
         return
 
-    if chat_member.status not in ['member', 'administrator', 'creator']:
+    if not all_in:
         await bot.send_message(message.from_user.id,
                                'Чтобы получить ключ, вы должны быть подписаны на наш канал!',
                                reply_markup=get_keyboard())
         return
     else:
-        await bot.send_message(message.from_user.id, 'Вы подписаны на канал!',
+        await bot.send_message(message.from_user.id, 'Вы подписаны на каналы!',
                                reply_markup=get_keyboard(only_ref=True))
         if 'referal' not in users[str(message.from_user.id)]:
             users[str(message.from_user.id)]['referal'] = ""
             save_user_data(users)
         else:
             referal = users[str(message.from_user.id)]['referal']
-            if referal != "" and referal.isdigit() and ('last_ref_time' not in users[referal] or current_time - users[referal]['last_ref_time'] >= 1):
+            if referal != "" and referal.isdigit() and (
+                    'last_ref_time' not in users[referal] or current_time - users[referal]['last_ref_time'] >= 1):
                 await send_key(int(referal), from_ref=True)
                 users[str(message.from_user.id)]['referal'] = ""
                 users[referal]['last_ref_time'] = current_time
