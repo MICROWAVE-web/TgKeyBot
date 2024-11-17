@@ -52,8 +52,8 @@ def get_keyboard(only_ref=False):
         return ReplyKeyboardMarkup(keyboard=[[bthref]], resize_keyboard=True)
     kbrd = [[
         *[InlineKeyboardButton(text=f"Канал {ind}", url=f'https://t.me/{channel[1:]}') for ind, channel in
-        enumerate(CHANNELS, start=1)],
-         InlineKeyboardButton(text="Проверить подписку", callback_data="subchennel")
+          enumerate(CHANNELS, start=1)],
+        InlineKeyboardButton(text="Проверить подписку", callback_data="subchennel")
     ]]
 
     return InlineKeyboardMarkup(inline_keyboard=kbrd, resize_keyboard=True)
@@ -98,83 +98,92 @@ async def send_key(user_id, from_ref=False):
         return False
 
 
+# Временное хранилище обработки команд
+active_processes = set()  # Используем set для хранения ID пользователей, чтобы отслеживать активные процессы
+
+
 @dp.callback_query(F.data == 'subchennel')
 @dp.message(CommandStart())
 async def check_subscribe(message: types.Message, command: CommandObject = None):
-    users = get_users()
+    user_id = str(message.from_user.id)
     current_time = time.time()
-    if str(message.from_user.id) not in users:
-        await bot.send_message(message.from_user.id,
-                               '''
+    users = get_users()
+
+    # Проверяем, если команда уже в процессе выполнения
+    if user_id in active_processes:
+        await bot.send_message(message.from_user.id, "Ваш запрос уже обрабатывается. Пожалуйста, подождите.")
+        return
+
+    # Устанавливаем флаг процесса
+    active_processes.add(user_id)
+
+    try:
+        # Проверяем, если пользователь уже зарегистрирован
+        if user_id not in users:
+            await bot.send_message(message.from_user.id,
+                                   '''
 👋 Привет, старина! Я РобоГабен, щедрый бот, который раздает ключи от игр Steam совершенно бесплатно каждые 2 недели. 
 
 ▫️Для получения ключей, нужно быть подписанным на Халявный Steam (http://t.me/SteamByFree) 🎮
 ▫️А также, нужно быть подписанным на Сын Габена (http://t.me/gabenson) 🎮
 
-▫️Мой создатель: Cын Габена  (http://t.me/gabenson)
+▫️Мой создатель: Сын Габена  (http://t.me/gabenson)
 ▫️По техническим вопросам, обращайтесь: @sh33shka
 
 ✅ Приводи друга по своей реф. ссылке и получи еще один ключик                               
-                               ''')
-        referal = ""
-        # Проверка реферала
-        if command and command.args:
-            reference = str(decode_payload(command.args))
-            if reference != str(message.from_user.id):
-                referal = reference
+                                   ''')
+            referal = ""
+            if command and command.args:
+                reference = str(decode_payload(command.args))
+                if reference != user_id:  # Исключаем реферальную ссылку на самого себя
+                    referal = reference
 
-        users[str(message.from_user.id)] = {
-            'referal': referal
-        }
-        save_user_data(users)
+            users[user_id] = {'referal': referal}
+            save_user_data(users)
 
-    # Проверка подписки на канал
-
-    try:
+        # Проверка подписки
         all_in = True
         for channel in CHANNELS:
-            chat_member = await bot.get_chat_member(chat_id=channel, user_id=message.from_user.id)
-            if chat_member.status not in ['member', 'administrator', 'creator']:
+            try:
+                chat_member = await bot.get_chat_member(chat_id=channel, user_id=message.from_user.id)
+                if chat_member.status not in ['member', 'administrator', 'creator']:
+                    all_in = False
+                    break
+            except TelegramBadRequest:
                 all_in = False
                 break
-    except TelegramBadRequest:
-        logging.error("Бот не состоит в канале!")
-        await bot.send_message(message.from_user.id, 'Произошла ошибка, попробуйте позже')
-        return
 
-    if not all_in:
-        await bot.send_message(message.from_user.id,
-                               'Чтобы получить ключ, вы должны быть подписаны на наш канал!',
-                               reply_markup=get_keyboard())
-        return
-    else:
+        if not all_in:
+            await bot.send_message(message.from_user.id,
+                                   'Чтобы получить ключ, вы должны быть подписаны на наш канал!',
+                                   reply_markup=get_keyboard())
+            return
+
         await bot.send_message(message.from_user.id, 'Вы подписаны на каналы!',
                                reply_markup=get_keyboard(only_ref=True))
-        if 'referal' not in users[str(message.from_user.id)]:
-            users[str(message.from_user.id)]['referal'] = ""
-            save_user_data(users)
-        else:
-            referal = users[str(message.from_user.id)]['referal']
-            if referal != "" and referal.isdigit() and (
-                    'last_ref_time' not in users[referal] or current_time - users[referal]['last_ref_time'] >= 1):
+
+        # Проверка реферальной системы
+        referal = users[user_id].get('referal', "")
+        if referal and referal.isdigit():
+            if 'last_ref_time' not in users[referal] or current_time - users[referal]['last_ref_time'] >= 1:
                 await send_key(int(referal), from_ref=True)
-                users[str(message.from_user.id)]['referal'] = ""
+                users[user_id]['referal'] = ""
                 users[referal]['last_ref_time'] = current_time
                 save_user_data(users)
 
-    # Проверка времени последнего получения ключа
-    if str(message.from_user.id) in users:
-        if 'last_key_time' in users[str(message.from_user.id)] and current_time - users[str(message.from_user.id)][
-            'last_key_time'] < 1209600:  # 2 недели в секундах
+        # Проверка времени последнего получения ключа
+        if 'last_key_time' in users[user_id] and current_time - users[user_id]['last_key_time'] < 1209600:
             await bot.send_message(message.from_user.id, 'Вы можете получить следующий ключ через 2 недели.')
             return
 
-    sended = await send_key(message.from_user.id)
-    # Выдача ключа
+        # Выдача ключа
+        if await send_key(message.from_user.id):
+            users[user_id]['last_key_time'] = current_time
+            save_user_data(users)
 
-    if sended is True:
-        users[str(message.from_user.id)]['last_key_time'] = current_time
-        save_user_data(users)
+    finally:
+        # Снимаем флаг обработки
+        active_processes.discard(user_id)
 
 
 @dp.message(F.document)
