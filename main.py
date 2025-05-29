@@ -1,18 +1,24 @@
-import asyncio
 import json
-import logging
 import os
 import random
 import sys
 import time
 
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandStart, CommandObject
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.deep_linking import create_start_link
 from aiogram.utils.payload import decode_payload
 from decouple import config
+import asyncio
+import logging
+from aiogram.filters import CommandObject, Command
+from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramBadRequest
+from aiogram import types
+
+ALERT_DELAY = 3  # секунды между сообщениями
+REPORT_EVERY = 25000  # как часто присылать отчёт админу
 
 API_TOKEN = config('API_TOKEN')
 CHANNELS = config('CHANNELS').split(',')
@@ -124,7 +130,7 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
                                    '''
 🙏 Привет, старина! Я РобоГабен, щедрый бот, который раздает ключи от игр Steam совершенно бесплатно каждые 2 недели. 
 
-▫️Для получения ключей, нужно быть подписанным на [меня](https://t.me/gabenson)
+▫️Для получения ключей, нужно быть подписанным на [меня](https://t.me/gabenson) и на [Халявный Steam](https://t.me/SteamByFree)
 
 ▫️Мой создатель: [Cын Габена](http://t.me/gabenson)
 ▫️По техническим вопросам, обращайтесь: @sh33shka                           
@@ -169,7 +175,7 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
                 save_user_data(users)
 
         # Проверка времени последнего получения ключа
-        #if 'last_key_time' in users[user_id] and current_time - users[user_id]['last_key_time'] < 1209600:
+        # if 'last_key_time' in users[user_id] and current_time - users[user_id]['last_key_time'] < 1209600:
         if 'last_key_time' in users[user_id]:
             await bot.send_message(message.from_user.id, 'Вы уже получили ключ.')
             return
@@ -210,6 +216,63 @@ async def handle_docs(message: types.Message):
             await message.reply('Неверный файл. Пожалуйста, отправьте файл с именем keys.txt.')
     else:
         await message.reply('У вас нет прав для выполнения этой команды.')
+
+
+@dp.message(Command(commands=['alert']))
+async def cmd_alert(message: types.Message, command: CommandObject):
+    user_id = str(message.from_user.id)
+    if user_id not in admins:
+        return await message.reply("❌ У вас нет прав для выполнения этой команды.")
+    if not command.args:
+        return await message.reply("Использование: /alert <текст рассылки>")
+
+    text = command.args
+    await message.reply("📨 Рассылка началась. Она займёт около 4 дней.")
+    await asyncio.create_task(alert_background(text, message.from_user.id))
+
+
+async def alert_background(text: str, admin_id: int):
+    users = get_users()
+    total = len(users)
+    sent = 0
+    failed = 0
+
+    for idx, (uid, _) in enumerate(users.items(), start=1):
+        try:
+            await bot.send_message(chat_id=int(uid), text=text)
+            sent += 1
+        except TelegramBadRequest as e:
+            logging.warning(f"BadRequest при отправке {uid}: {e}")
+            failed += 1
+        except TelegramAPIError as e:
+            if "Too Many Requests" in str(e):
+                logging.warning(f"Превышен лимит. Пауза 5 секунд.")
+                await asyncio.sleep(5)
+                try:
+                    await bot.send_message(chat_id=int(uid), text=text)
+                    sent += 1
+                except Exception as ex:
+                    failed += 1
+                    logging.error(f"Ошибка при повторной отправке {uid}: {ex}")
+            else:
+                failed += 1
+                logging.error(f"API ошибка: {e}")
+        except Exception as e:
+            logging.error(f"Ошибка при отправке {uid}: {e}")
+            failed += 1
+
+        if idx % REPORT_EVERY == 0:
+            await bot.send_message(
+                chat_id=admin_id,
+                text=f"📊 Промежуточный отчёт: {sent} отправлено, {failed} ошибок из {idx} обработанных.",
+            )
+
+        await asyncio.sleep(ALERT_DELAY)
+
+    await bot.send_message(
+        chat_id=admin_id,
+        text=f"✅ Рассылка завершена. Всего: {sent} отправлено, {failed} ошибок, из {total} пользователей.",
+    )
 
 
 async def main() -> None:
