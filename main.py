@@ -3,6 +3,7 @@ import os
 import random
 import sys
 import time
+import traceback
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
@@ -147,12 +148,16 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
         # Проверка подписки
         all_in = True
         for channel in CHANNELS:
+
             try:
                 chat_member = await bot.get_chat_member(chat_id=channel, user_id=message.from_user.id)
+                print(chat_member.status)
                 if chat_member.status not in ['member', 'administrator', 'creator']:
+
                     all_in = False
                     break
             except TelegramBadRequest:
+                traceback.print_exc()
                 all_in = False
                 break
 
@@ -175,8 +180,8 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
                 save_user_data(users)
 
         # Проверка времени последнего получения ключа
-        # if 'last_key_time' in users[user_id] and current_time - users[user_id]['last_key_time'] < 1209600:
-        if 'last_key_time' in users[user_id]:
+        if 'last_key_time' in users[user_id] and current_time - users[user_id]['last_key_time'] < 1209600:
+        # if 'last_key_time' in users[user_id]:
             await bot.send_message(message.from_user.id, 'Вы уже получили ключ.')
             return
 
