@@ -434,7 +434,7 @@ async def main() -> None:
     await init_redis()
 
     # Запуск бота
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, skip_updates=True)
 
 
 if __name__ == '__main__':
