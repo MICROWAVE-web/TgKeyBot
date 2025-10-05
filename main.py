@@ -17,6 +17,7 @@ from aiogram.filters import CommandObject, Command
 from aiogram.exceptions import TelegramAPIError
 from aiogram.exceptions import TelegramBadRequest
 from aiogram import types
+import redis.asyncio as redis
 
 ALERT_DELAY = 3  # секунды между сообщениями
 REPORT_EVERY = 25000  # как часто присылать отчёт админу
@@ -24,11 +25,128 @@ REPORT_EVERY = 25000  # как часто присылать отчёт адми
 API_TOKEN = config('API_TOKEN')
 CHANNELS = config('CHANNELS').split(',')
 
+# Redis для антиспама
+REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
 keys_file = config('KEYS_FILENAME')
 admins = config('ADMINS').split(',')
+
+# Инициализация Redis
+redis_client = None
+
+
+async def init_redis():
+    global redis_client
+    try:
+        redis_client = await redis.from_url(REDIS_URL, decode_responses=True)
+        await redis_client.ping()
+        logging.info("Redis connected successfully")
+    except Exception as e:
+        logging.error(f"Redis connection failed: {e}")
+        redis_client = None
+
+
+class Throttled(Exception):
+    pass
+
+
+class CancelHandler(Exception):
+    pass
+
+
+class ThrottlingMiddleware:
+    def __init__(self, rate_limit: float = 1.0, key_prefix: str = 'antiflood_'):
+        self.rate_limit = rate_limit
+        self.prefix = key_prefix
+
+    async def __call__(self, handler, event: types.Message, data: dict):
+        if not redis_client:
+            return await handler(event, data)
+
+        user_id = event.from_user.id
+        key = f"{self.prefix}_{user_id}"
+
+        try:
+            await self.check_rate_limit(key)
+        except Throttled:
+            await event.answer("⚠️ Слишком много запросов. Пожалуйста, подождите немного.")
+            return
+
+        return await handler(event, data)
+
+    async def check_rate_limit(self, key: str):
+        if not redis_client:
+            return
+
+        now = time.time()
+        data = await redis_client.hgetall(key)
+
+        if data:
+            last_call = float(data.get('last_call', 0))
+            exceeded_count = int(data.get('exceeded_count', 0))
+            delta = now - last_call
+
+            if delta < self.rate_limit:
+                exceeded_count += 1
+                await redis_client.hset(key, mapping={
+                    'last_call': now,
+                    'exceeded_count': exceeded_count,
+                    'delta': delta
+                })
+                raise Throttled()
+
+        await redis_client.hset(key, mapping={
+            'last_call': now,
+            'exceeded_count': 0,
+            'delta': 0
+        })
+        await redis_client.expire(key, 3600)  # Удаляем ключ через час
+
+
+# Антиспам middleware для callback запросов
+class CallbackThrottlingMiddleware:
+    def __init__(self, rate_limit: float = 1.0):
+        self.rate_limit = rate_limit
+
+    async def __call__(self, handler, event: types.CallbackQuery, data: dict):
+        if not redis_client:
+            return await handler(event, data)
+
+        user_id = event.from_user.id
+        key = f"callback_antiflood_{user_id}"
+
+        try:
+            await self.check_rate_limit(key)
+        except Throttled:
+            await event.answer("⚠️ Слишком много кликов. Подождите секунду.", show_alert=True)
+            return
+
+        return await handler(event, data)
+
+    async def check_rate_limit(self, key: str):
+        if not redis_client:
+            return
+
+        now = time.time()
+        last_call = await redis_client.get(key)
+
+        if last_call:
+            delta = now - float(last_call)
+            if delta < self.rate_limit:
+                raise Throttled()
+
+        await redis_client.setex(key, self.rate_limit * 2, str(now))
+
+
+# Регистрация middleware
+message_throttle = ThrottlingMiddleware(rate_limit=2.0)  # 1 сообщение в 2 секунды
+callback_throttle = CallbackThrottlingMiddleware(rate_limit=1.0)  # 1 колбэк в секунду
+
+dp.message.middleware(message_throttle)
+dp.callback_query.middleware(callback_throttle)
 
 
 def get_keys():
@@ -79,6 +197,20 @@ def save_keys(keys):
 # хендлер для создания ссылок
 @dp.message(F.text.startswith("Моя реферальная ссылка"))
 async def get_ref(message: types.Message):
+    # Дополнительная проверка частоты запросов для реферальных ссылок
+    if redis_client:
+        user_id = message.from_user.id
+        key = f"ref_link_{user_id}"
+        last_request = await redis_client.get(key)
+
+        if last_request:
+            delta = time.time() - float(last_request)
+            if delta < 30:  # Не чаще чем раз в 30 секунд
+                await message.answer("⚠️ Ссылку можно запрашивать не чаще чем раз в 30 секунд.")
+                return
+
+        await redis_client.setex(key, 30, str(time.time()))
+
     link = await create_start_link(bot, str(message.from_user.id), encode=True)
     await bot.send_message(message.from_user.id, f"Ваша реф. ссылка {link}")
 
@@ -110,6 +242,24 @@ active_processes = set()  # Используем set для хранения ID 
 
 
 @dp.callback_query(F.data == 'subchennel')
+async def check_subscribe_callback(callback: types.CallbackQuery):
+    # Дополнительная защита от спама в колбэках
+    if redis_client:
+        user_id = callback.from_user.id
+        key = f"sub_check_{user_id}"
+        last_check = await redis_client.get(key)
+
+        if last_check:
+            delta = time.time() - float(last_check)
+            if delta < 3:  # Не чаще чем раз в 3 секунды
+                await callback.answer("⚠️ Проверять подписку можно не чаще чем раз в 3 секунды", show_alert=True)
+                return
+
+        await redis_client.setex(key, 3, str(time.time()))
+
+    await check_subscribe(callback.message)
+
+
 @dp.message(CommandStart())
 async def check_subscribe(message: types.Message, command: CommandObject = None):
     user_id = str(message.from_user.id)
@@ -153,7 +303,6 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
                 chat_member = await bot.get_chat_member(chat_id=channel, user_id=message.from_user.id)
                 print(chat_member.status)
                 if chat_member.status not in ['member', 'administrator', 'creator']:
-
                     all_in = False
                     break
             except TelegramBadRequest:
@@ -181,7 +330,7 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
 
         # Проверка времени последнего получения ключа
         if 'last_key_time' in users[user_id] and current_time - users[user_id]['last_key_time'] < 1209600:
-        # if 'last_key_time' in users[user_id]:
+            # if 'last_key_time' in users[user_id]:
             await bot.send_message(message.from_user.id, 'Вы уже получили ключ.')
             return
 
@@ -281,6 +430,10 @@ async def alert_background(text: str, admin_id: int):
 
 
 async def main() -> None:
+    # Инициализация Redis
+    await init_redis()
+
+    # Запуск бота
     await dp.start_polling(bot)
 
 
