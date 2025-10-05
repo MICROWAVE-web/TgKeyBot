@@ -433,8 +433,11 @@ async def main() -> None:
     # Инициализация Redis
     await init_redis()
 
+    # Пропускаем накопившиеся апдейты при запуске
+    await bot.delete_webhook(drop_pending_updates=True)
+
     # Запуск бота
-    await dp.start_polling(bot, skip_updates=True)
+    await dp.start_polling(bot)
 
 
 if __name__ == '__main__':
