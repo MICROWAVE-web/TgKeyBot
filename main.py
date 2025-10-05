@@ -138,7 +138,7 @@ class CallbackThrottlingMiddleware:
             if delta < self.rate_limit:
                 raise Throttled()
 
-        await redis_client.setex(key, self.rate_limit * 2, str(now))
+        await redis_client.setex(key, int(self.rate_limit * 2), str(now))
 
 
 # Регистрация middleware
