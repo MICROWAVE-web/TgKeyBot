@@ -283,7 +283,6 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
 
             try:
                 chat_member = await bot.get_chat_member(chat_id=channel, user_id=message.from_user.id)
-                print(chat_member.status)
                 if chat_member.status not in ['member', 'administrator', 'creator']:
                     all_in = False
                     break
