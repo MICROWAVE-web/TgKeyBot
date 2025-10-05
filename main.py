@@ -242,24 +242,6 @@ active_processes = set()  # Используем set для хранения ID 
 
 
 @dp.callback_query(F.data == 'subchennel')
-async def check_subscribe_callback(callback: types.CallbackQuery):
-    # Дополнительная защита от спама в колбэках
-    if redis_client:
-        user_id = callback.from_user.id
-        key = f"sub_check_{user_id}"
-        last_check = await redis_client.get(key)
-
-        if last_check:
-            delta = time.time() - float(last_check)
-            if delta < 3:  # Не чаще чем раз в 3 секунды
-                await callback.answer("⚠️ Проверять подписку можно не чаще чем раз в 3 секунды", show_alert=True)
-                return
-
-        await redis_client.setex(key, 3, str(time.time()))
-
-    await check_subscribe(callback.message)
-
-
 @dp.message(CommandStart())
 async def check_subscribe(message: types.Message, command: CommandObject = None):
     user_id = str(message.from_user.id)
