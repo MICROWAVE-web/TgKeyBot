@@ -1,23 +1,28 @@
+import asyncio
 import json
+import logging
 import os
 import random
 import sys
 import time
 import traceback
 
+import redis.asyncio as redis
 from aiogram import Bot, Dispatcher, F
+from aiogram import types
+from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import CommandObject, Command
 from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.deep_linking import create_start_link
 from aiogram.utils.payload import decode_payload
 from decouple import config
-import asyncio
-import logging
-from aiogram.filters import CommandObject, Command
-from aiogram.exceptions import TelegramAPIError
-from aiogram.exceptions import TelegramBadRequest
-from aiogram import types
-import redis.asyncio as redis
+
+# локальная блокировка по пользователю, чтобы не выдавать несколько ключей при спаме
+user_locks = {}
+
+LOCK_TTL = 5  # сек
 
 ALERT_DELAY = 3  # секунды между сообщениями
 REPORT_EVERY = 25000  # как часто присылать отчёт админу
@@ -47,6 +52,35 @@ async def init_redis():
     except Exception as e:
         logging.error(f"Redis connection failed: {e}")
         redis_client = None
+
+
+async def load_keys_to_redis():
+    """Загрузка ключей из файла в Redis при старте, если список пуст."""
+    if not redis_client:
+        return
+    list_len = await redis_client.llen('keys_list')
+    if list_len and list_len > 0:
+        return
+    keys = get_keys()
+    if keys:
+        await redis_client.rpush('keys_list', *keys)
+        logging.info(f"Loaded {len(keys)} keys into Redis list.")
+
+
+async def acquire_user_lock(user_id: int):
+    """Простая локальная блокировка, чтобы не спамили и не получали несколько ключей."""
+    if user_id in user_locks:
+        return False
+    user_locks[user_id] = time.time()
+    return True
+
+
+async def release_user_lock(user_id: int):
+    """Освобождение локальной блокировки"""
+    try:
+        user_locks.pop(user_id, None)
+    except Exception:
+        pass
 
 
 class Throttled(Exception):
@@ -215,26 +249,47 @@ async def get_ref(message: types.Message):
     await bot.send_message(message.from_user.id, f"Ваша реф. ссылка {link}")
 
 
-async def send_key(user_id, from_ref=False):
-    keys = get_keys()
-    lkeys = len(keys)
-    if lkeys <= int(config('KEYS_LEN_ALERT')):
-        for admin in admins:
-            try:
-                await bot.send_message(int(admin), f'Внимание, осталось мало ключей: {lkeys}')
-            except TelegramBadRequest:
-                logging.warning('Telegram Bad Request')
-    if keys:
-        key = random.choice(keys)
-        keys.remove(key)
-        save_keys(keys)
+async def send_key(user_id: int, from_ref=False):
+    if not await acquire_user_lock(user_id):
+        await bot.send_message(user_id, "⚠️ Ваш запрос уже обрабатывается. Подождите пару секунд.")
+        return False
+
+    try:
+        key = None
+        if redis_client:
+            key = await redis_client.lpop('keys_list')  # атомарная выдача
+
+        if not key:
+            # fallback на файл (на случай сбоя Redis)
+            keys = get_keys()
+            if not keys:
+                await bot.send_message(user_id, 'Ключи закончились.')
+                return False
+            key = random.choice(keys)
+            keys.remove(key)
+            save_keys(keys)
+
+        # проверка остатка ключей
+        if redis_client:
+            lkeys = await redis_client.llen('keys_list')
+        else:
+            lkeys = len(get_keys())
+
+        if lkeys <= int(config('KEYS_LEN_ALERT')):
+            for admin in admins:
+                try:
+                    await bot.send_message(int(admin), f'Внимание, осталось мало ключей: {lkeys}')
+                except TelegramBadRequest:
+                    logging.warning('Telegram Bad Request')
+
         if from_ref:
             await bot.send_message(user_id, f'Ура, по реферальной ссылке перешли, держи подарок 🎁')
+
         await bot.send_message(user_id, f'Ваш ключ: {key}')
         return True
-    else:
-        await bot.send_message(user_id, 'Ключи закончились.')
-        return False
+
+    finally:
+        await release_user_lock(user_id)
 
 
 # Временное хранилище обработки команд
@@ -337,6 +392,11 @@ async def handle_docs(message: types.Message):
             with open('new_keys.txt', 'r') as file:
                 new_keys = file.read().splitlines()
 
+            # Добавляем ключи в Redis
+            if redis_client:
+                if new_keys:
+                    await redis_client.rpush('keys_list', *new_keys)
+
             keys = get_keys()
             for nkew in new_keys:
                 if nkew not in keys:
@@ -351,6 +411,8 @@ async def handle_docs(message: types.Message):
             await message.reply('Неверный файл. Пожалуйста, отправьте файл с именем keys.txt.')
     else:
         await message.reply('У вас нет прав для выполнения этой команды.')
+
+
 
 
 @dp.message(Command(commands=['alert']))
@@ -413,7 +475,7 @@ async def alert_background(text: str, admin_id: int):
 async def main() -> None:
     # Инициализация Redis
     await init_redis()
-
+    await load_keys_to_redis()
     # Пропускаем накопившиеся апдейты при запуске
     await bot.delete_webhook(drop_pending_updates=True)
 
