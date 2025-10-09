@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import random
+import ssl
 import sys
 import time
 import traceback
@@ -506,11 +507,14 @@ def main():
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
 
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_context.load_cert_chain(SSL_CERT, SSL_KEY)
+
     web.run_app(
         app,
         host='0.0.0.0',
         port=WEBHOOK_PORT,
-        ssl_context=(SSL_CERT, SSL_KEY)
+        ssl_context=ssl_context
     )
 
 
