@@ -15,7 +15,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandObject, Command
 from aiogram.filters import CommandStart
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, InputFile
 from aiogram.utils.deep_linking import create_start_link
 from aiogram.utils.payload import decode_payload
 from aiohttp import web
@@ -485,7 +485,9 @@ WEBHOOK_PORT = int(config('WEBHOOK_PORT', default=8443))
 async def on_startup(app):
     await init_redis()
     await load_keys_to_redis()
-    await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True, certificate=open(SSL_CERT, 'rb'))
+    cert = InputFile(SSL_CERT)
+    await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True, certificate=cert)
+
     logging.info(f"Webhook set to {WEBHOOK_URL}")
 
 
