@@ -2,3 +2,6 @@
 /venv/
 /.env/
 /env/
+/users.json
+/keys.txt
+/.env

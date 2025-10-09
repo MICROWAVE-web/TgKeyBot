@@ -17,6 +17,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.deep_linking import create_start_link
 from aiogram.utils.payload import decode_payload
+from aiohttp import web
 from decouple import config
 
 # локальная блокировка по пользователю, чтобы не выдавать несколько ключей при спаме
@@ -413,8 +414,6 @@ async def handle_docs(message: types.Message):
         await message.reply('У вас нет прав для выполнения этой команды.')
 
 
-
-
 @dp.message(Command(commands=['alert']))
 async def cmd_alert(message: types.Message, command: CommandObject):
     user_id = str(message.from_user.id)
@@ -472,17 +471,49 @@ async def alert_background(text: str, admin_id: int):
     )
 
 
-async def main() -> None:
-    # Инициализация Redis
+# Webhook configuration
+WEBHOOK_HOST = config('WEBHOOK_HOST', default='https://robogaben.ru')
+WEBHOOK_PATH = config('WEBHOOK_PATH', default='/webhook')
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+
+SSL_CERT = config('SSL_CERT', default='webhook.pem')
+SSL_KEY = config('SSL_KEY', default='webhook.key')
+WEBHOOK_PORT = int(config('WEBHOOK_PORT', default=8443))
+
+
+async def on_startup(app):
     await init_redis()
     await load_keys_to_redis()
-    # Пропускаем накопившиеся апдейты при запуске
-    await bot.delete_webhook(drop_pending_updates=True)
+    await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
+    logging.info(f"Webhook set to {WEBHOOK_URL}")
 
-    # Запуск бота
-    await dp.start_polling(bot)
+
+async def on_shutdown(app):
+    await bot.delete_webhook()
+    logging.info("Webhook removed")
+
+
+async def handle_webhook(request):
+    update = await request.json()
+    update = types.Update(**update)
+    await dp.feed_update(bot, update)
+    return web.Response()
+
+
+def main():
+    app = web.Application()
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+
+    web.run_app(
+        app,
+        host='0.0.0.0',
+        port=WEBHOOK_PORT,
+        ssl_context=(SSL_CERT, SSL_KEY)
+    )
 
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-    asyncio.run(main())
+    main()
