@@ -485,7 +485,7 @@ WEBHOOK_PORT = int(config('WEBHOOK_PORT', default=8443))
 async def on_startup(app):
     await init_redis()
     await load_keys_to_redis()
-    await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
+    await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True, certificate=open(SSL_CERT, 'rb'))
     logging.info(f"Webhook set to {WEBHOOK_URL}")
 
 
