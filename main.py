@@ -212,9 +212,17 @@ def get_keyboard(only_ref=False):
     if only_ref:
         bthref = KeyboardButton(text="Моя реферальная ссылка")
         return ReplyKeyboardMarkup(keyboard=[[bthref]], resize_keyboard=True)
+
+    channels_invite_str = []
+    for channel in CHANNELS:
+        if '|' in channel:
+            channels_invite_str.append(channel.rstrip("|").split("|")[-1])
+        else:
+            channels_invite_str.append(channel.lstrip("@"))
+
     kbrd = [[
-        *[InlineKeyboardButton(text=f"Канал {ind}", url=f'https://t.me/{channel[1:]}') for ind, channel in
-          enumerate(CHANNELS, start=1)],
+        *[InlineKeyboardButton(text=f"Канал {ind}", url=f'https://t.me/{channel_invite}') for ind, channel_invite in
+          enumerate(channels_invite_str, start=1)],
         InlineKeyboardButton(text="Проверить подписку", callback_data="subchennel")
     ]]
 
