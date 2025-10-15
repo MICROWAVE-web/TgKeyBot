@@ -11,12 +11,14 @@ import traceback
 import redis.asyncio as redis
 from aiogram import Bot, Dispatcher, F
 from aiogram import types
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandObject, Command
 from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, InputFile, \
     FSInputFile
+from aiogram.exceptions import TelegramBadRequest, TelegramAPIError, TelegramForbiddenError, TelegramNotFound
+
 from aiogram.utils.deep_linking import create_start_link
 from aiogram.utils.payload import decode_payload
 from aiohttp import web
@@ -438,7 +440,8 @@ async def cmd_alert(message: types.Message, command: CommandObject):
 
     text = command.args
     await message.reply("📨 Рассылка началась. Она займёт около 4 дней.")
-    await asyncio.create_task(alert_background(text, message.from_user.id))
+    # 👇 Запускаем фоновую задачу, без ожидания (await тут не нужно)
+    asyncio.create_task(alert_background(text, message.from_user.id))
 
 
 async def alert_background(text: str, admin_id: int):
@@ -449,36 +452,54 @@ async def alert_background(text: str, admin_id: int):
 
     for idx, (uid, _) in enumerate(users.items(), start=1):
         try:
-            await bot.send_message(chat_id=int(uid), text=text)
+            await bot.send_message(chat_id=uid, text=text)
             sent += 1
+
+        except TelegramForbiddenError:
+            logging.warning(f"Пользователь {uid} заблокировал бота.")
+            failed += 1
+
+        except TelegramNotFound:
+            logging.warning(f"Пользователь {uid} не найден.")
+            failed += 1
+
+        except TelegramRetryAfter as e:
+            delay = int(e.retry_after) + 1
+            logging.warning(f"Превышен лимит. Пауза {delay} секунд.")
+            await asyncio.sleep(delay)
+            try:
+                await bot.send_message(chat_id=uid, text=text)
+                sent += 1
+            except Exception as ex:
+                failed += 1
+                logging.error(f"Ошибка при повторной отправке {uid}: {ex}")
+
         except TelegramBadRequest as e:
             logging.warning(f"BadRequest при отправке {uid}: {e}")
             failed += 1
+
         except TelegramAPIError as e:
-            if "Too Many Requests" in str(e):
-                logging.warning(f"Превышен лимит. Пауза 5 секунд.")
-                await asyncio.sleep(5)
-                try:
-                    await bot.send_message(chat_id=int(uid), text=text)
-                    sent += 1
-                except Exception as ex:
-                    failed += 1
-                    logging.error(f"Ошибка при повторной отправке {uid}: {ex}")
-            else:
-                failed += 1
-                logging.error(f"API ошибка: {e}")
-        except Exception as e:
-            logging.error(f"Ошибка при отправке {uid}: {e}")
+            logging.error(f"API ошибка для {uid}: {e}")
             failed += 1
 
-        if idx % REPORT_EVERY == 0:
-            await bot.send_message(
-                chat_id=admin_id,
-                text=f"📊 Промежуточный отчёт: {sent} отправлено, {failed} ошибок из {idx} обработанных.",
-            )
+        except Exception as e:
+            logging.error(f"Неизвестная ошибка при отправке {uid}: {e}")
+            failed += 1
 
+        # 👇 промежуточный отчёт администратору
+        if idx % REPORT_EVERY == 0:
+            try:
+                await bot.send_message(
+                    chat_id=admin_id,
+                    text=f"📊 Промежуточный отчёт: {sent} отправлено, {failed} ошибок из {idx} обработанных.",
+                )
+            except Exception as e:
+                logging.error(f"Ошибка при отправке отчёта админу: {e}")
+
+        # 👇 задержка между отправками (чтобы не словить flood)
         await asyncio.sleep(ALERT_DELAY)
 
+    # 👇 итоговое сообщение админу
     await bot.send_message(
         chat_id=admin_id,
         text=f"✅ Рассылка завершена. Всего: {sent} отправлено, {failed} ошибок, из {total} пользователей.",
