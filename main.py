@@ -347,7 +347,7 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
         all_in = True
         for channel in CHANNELS:
             if '|' in channel:
-                channel = channel.rstrip("|").split("|")[-1]
+                channel = channel.split("|")[0]
             else:
                 channel = channel.lstrip("@")
 
