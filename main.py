@@ -346,6 +346,10 @@ async def check_subscribe(message: types.Message, command: CommandObject = None)
         # Проверка подписки
         all_in = True
         for channel in CHANNELS:
+            if '|' in channel:
+                channel = channel.rstrip("|").split("|")[-1]
+            else:
+                channel = channel.lstrip("@")
 
             try:
                 chat_member = await bot.get_chat_member(chat_id=channel, user_id=message.from_user.id)
