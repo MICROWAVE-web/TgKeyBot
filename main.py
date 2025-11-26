@@ -271,9 +271,12 @@ async def send_key(user_id: int, from_ref=False):
         key = None
         if redis_client:
             key = await redis_client.lpop('keys_list')  # атомарная выдача
-
-        if not key:
-            # fallback на файл (на случай сбоя Redis)
+            # Если Redis доступен, но ключей нет - значит они закончились
+            if not key:
+                await bot.send_message(user_id, 'Ключи закончились.')
+                return False
+        else:
+            # fallback на файл только если Redis недоступен
             keys = get_keys()
             if not keys:
                 await bot.send_message(user_id, 'Ключи закончились.')
@@ -413,14 +416,17 @@ async def handle_docs(message: types.Message):
             if redis_client:
                 if new_keys:
                     await redis_client.rpush('keys_list', *new_keys)
-
-            keys = get_keys()
-            for nkew in new_keys:
-                if nkew not in keys:
-                    keys.append(nkew)
-
-            with open(keys_file, 'w') as file:
-                file.write('\n'.join(keys))
+                    # Если Redis используется, сохраняем только новые ключи в файл (без старых)
+                    with open(keys_file, 'w') as file:
+                        file.write('\n'.join(new_keys))
+            else:
+                # Если Redis недоступен, используем файл как основной источник
+                keys = get_keys()
+                for nkew in new_keys:
+                    if nkew not in keys:
+                        keys.append(nkew)
+                with open(keys_file, 'w') as file:
+                    file.write('\n'.join(keys))
 
             os.remove('new_keys.txt')
             await message.reply('Ключи успешно обновлены.')
