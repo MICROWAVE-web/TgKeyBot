@@ -59,17 +59,41 @@ async def init_redis():
         redis_client = None
 
 
+async def sync_file_from_redis():
+    """Синхронизация файла с Redis - обновляет файл на основе того, что есть в Redis."""
+    if not redis_client:
+        return
+    try:
+        # Получаем все ключи из Redis
+        redis_keys = await redis_client.lrange('keys_list', 0, -1)
+        if redis_keys:
+            # Обновляем файл, оставляя только те ключи, что есть в Redis
+            save_keys(redis_keys)
+            logging.info(f"Synced file with Redis: {len(redis_keys)} keys in file.")
+    except Exception as e:
+        logging.error(f"Error syncing file from Redis: {e}")
+
+
 async def load_keys_to_redis():
     """Загрузка ключей из файла в Redis при старте, если список пуст."""
     if not redis_client:
         return
     list_len = await redis_client.llen('keys_list')
     if list_len and list_len > 0:
+        # Если в Redis есть ключи, синхронизируем файл с Redis
+        await sync_file_from_redis()
+        logging.info(f"Redis has {list_len} keys, synced file with Redis.")
         return
+    
+    # Если Redis пуст, загружаем из файла
     keys = get_keys()
     if keys:
-        await redis_client.rpush('keys_list', *keys)
-        logging.info(f"Loaded {len(keys)} keys into Redis list.")
+        # Убираем пустые строки и дубликаты
+        keys = [k.strip() for k in keys if k.strip()]
+        keys = list(dict.fromkeys(keys))  # Убираем дубликаты, сохраняя порядок
+        if keys:
+            await redis_client.rpush('keys_list', *keys)
+            logging.info(f"Loaded {len(keys)} keys from file into Redis.")
 
 
 async def acquire_user_lock(user_id: int):
@@ -275,6 +299,9 @@ async def send_key(user_id: int, from_ref=False):
             if not key:
                 await bot.send_message(user_id, 'Ключи закончились.')
                 return False
+            # Синхронизируем файл с Redis (обновляем файл на основе оставшихся ключей в Redis)
+            # Делаем это асинхронно, чтобы не блокировать выдачу ключа
+            asyncio.create_task(sync_file_from_redis())
         else:
             # fallback на файл только если Redis недоступен
             keys = get_keys()
@@ -412,18 +439,28 @@ async def handle_docs(message: types.Message):
             with open('new_keys.txt', 'r') as file:
                 new_keys = file.read().splitlines()
 
-            # Добавляем ключи в Redis
+            # Очищаем ключи от пустых строк
+            new_keys = [k.strip() for k in new_keys if k.strip()]
+
             if redis_client:
                 if new_keys:
-                    await redis_client.rpush('keys_list', *new_keys)
-                    # Если Redis используется, сохраняем только новые ключи в файл (без старых)
-                    with open(keys_file, 'w') as file:
-                        file.write('\n'.join(new_keys))
+                    # Получаем существующие ключи из Redis, чтобы избежать дубликатов
+                    existing_keys = set(await redis_client.lrange('keys_list', 0, -1))
+                    # Добавляем только новые ключи, которых нет в Redis
+                    keys_to_add = [k for k in new_keys if k not in existing_keys]
+                    if keys_to_add:
+                        await redis_client.rpush('keys_list', *keys_to_add)
+                        logging.info(f"Added {len(keys_to_add)} new keys to Redis (skipped {len(new_keys) - len(keys_to_add)} duplicates).")
+                    else:
+                        logging.info("All keys already exist in Redis.")
+                    # Синхронизируем файл с Redis (включая старые и новые ключи)
+                    await sync_file_from_redis()
             else:
                 # Если Redis недоступен, используем файл как основной источник
                 keys = get_keys()
+                existing_keys = set(keys)
                 for nkew in new_keys:
-                    if nkew not in keys:
+                    if nkew not in existing_keys:
                         keys.append(nkew)
                 with open(keys_file, 'w') as file:
                     file.write('\n'.join(keys))
