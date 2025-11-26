@@ -318,7 +318,10 @@ async def send_key(user_id: int, from_ref=False):
         else:
             lkeys = len(get_keys())
 
-        if lkeys <= int(config('KEYS_LEN_ALERT')):
+        if 1 <= lkeys <= int(config('KEYS_LEN_ALERT')):
+            alert_message = f'⚠️ ВНИМАНИЕ: Осталось мало ключей: {lkeys} (порог: {config("KEYS_LEN_ALERT")})'
+            # Логирование в консоль и файл
+            logging.warning(alert_message)
             for admin in admins:
                 try:
                     await bot.send_message(int(admin), f'Внимание, осталось мало ключей: {lkeys}')
@@ -598,5 +601,26 @@ def main():
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+    # Настройка логирования: в консоль и в файл
+    log_format = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Логирование в консоль
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(log_format)
+    
+    # Логирование в файл
+    file_handler = logging.FileHandler('bot.log', encoding='utf-8')
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(log_format)
+    
+    # Настройка root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
+    
     main()
