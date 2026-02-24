@@ -29,8 +29,11 @@ user_locks = {}
 
 LOCK_TTL = 5  # сек
 
-ALERT_DELAY = 3  # секунды между сообщениями
-REPORT_EVERY = 25000  # как часто присылать отчёт админу
+BATCH_SIZE = 20          # сколько сообщений за раз
+BATCH_DELAY = 1.0        # пауза между батчами
+REPORT_EVERY = 25000     # как часто присылать отчёт админу
+
+alert_lock = asyncio.Lock()
 
 API_TOKEN = config('API_TOKEN')
 CHANNELS = config('CHANNELS').split(',')
@@ -491,65 +494,87 @@ async def cmd_alert(message: types.Message, command: CommandObject):
 
 
 async def alert_background(text: str, admin_id: int):
-    users = get_users()
-    total = len(users)
-    sent = 0
-    failed = 0
+    async with alert_lock:  # защита от параллельных рассылок
+        users = get_users()
+        user_ids = list(users.keys())
 
-    for idx, (uid, _) in enumerate(users.items(), start=1):
+        total = len(user_ids)
+        sent = 0
+        failed = 0
+        start_time = time.time()
+
+        for i in range(0, total, BATCH_SIZE):
+            batch = user_ids[i:i + BATCH_SIZE]
+
+            tasks = []
+            for uid in batch:
+                tasks.append(send_alert(uid, text))
+
+            results = await asyncio.gather(*tasks)
+
+            for ok in results:
+                if ok:
+                    sent += 1
+                else:
+                    failed += 1
+
+            if sent and sent % REPORT_EVERY == 0:
+                elapsed = int(time.time() - start_time)
+                speed = sent / max(elapsed, 1)
+                eta = int((total - sent) / max(speed, 1))
+
+                try:
+                    await bot.send_message(
+                        chat_id=admin_id,
+                        text=(
+                            f"📊 Прогресс: {sent}/{total}\n"
+                            f"❌ Ошибок: {failed}\n"
+                            f"⚡ Скорость: {speed:.1f} msg/sec\n"
+                            f"⏳ ETA: {eta // 60} мин"
+                        )
+                    )
+                except Exception:
+                    pass
+
+            await asyncio.sleep(BATCH_DELAY)
+
+        total_time = int(time.time() - start_time)
+        await bot.send_message(
+            chat_id=admin_id,
+            text=(
+                f"✅ Рассылка завершена\n\n"
+                f"👥 Всего: {total}\n"
+                f"📨 Отправлено: {sent}\n"
+                f"❌ Ошибок: {failed}\n"
+                f"⏱ Время: {total_time // 60} мин"
+            )
+        )
+
+
+async def send_alert(uid: int, text: str) -> bool:
+    try:
+        await bot.send_message(chat_id=uid, text=text)
+        return True
+
+    except TelegramForbiddenError:
+        return False
+
+    except TelegramNotFound:
+        return False
+
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(e.retry_after + 1)
         try:
             await bot.send_message(chat_id=uid, text=text)
-            sent += 1
+            return True
+        except Exception:
+            return False
 
-        except TelegramForbiddenError:
-            logging.warning(f"Пользователь {uid} заблокировал бота.")
-            failed += 1
+    except TelegramAPIError:
+        return False
 
-        except TelegramNotFound:
-            logging.warning(f"Пользователь {uid} не найден.")
-            failed += 1
-
-        except TelegramRetryAfter as e:
-            delay = int(e.retry_after) + 1
-            logging.warning(f"Превышен лимит. Пауза {delay} секунд.")
-            await asyncio.sleep(delay)
-            try:
-                await bot.send_message(chat_id=uid, text=text)
-                sent += 1
-            except Exception as ex:
-                failed += 1
-                logging.error(f"Ошибка при повторной отправке {uid}: {ex}")
-
-        except TelegramBadRequest as e:
-            logging.warning(f"BadRequest при отправке {uid}: {e}")
-            failed += 1
-
-        except TelegramAPIError as e:
-            logging.error(f"API ошибка для {uid}: {e}")
-            failed += 1
-
-        except Exception as e:
-            logging.error(f"Неизвестная ошибка при отправке {uid}: {e}")
-            failed += 1
-
-        # 👇 промежуточный отчёт администратору
-        if idx % REPORT_EVERY == 0:
-            try:
-                await bot.send_message(
-                    chat_id=admin_id,
-                    text=f"📊 Промежуточный отчёт: {sent} отправлено, {failed} ошибок из {idx} обработанных.",
-                )
-            except Exception as e:
-                logging.error(f"Ошибка при отправке отчёта админу: {e}")
-
-        # 👇 задержка между отправками (чтобы не словить flood)
-        await asyncio.sleep(ALERT_DELAY)
-
-    # 👇 итоговое сообщение админу
-    await bot.send_message(
-        chat_id=admin_id,
-        text=f"✅ Рассылка завершена. Всего: {sent} отправлено, {failed} ошибок, из {total} пользователей.",
-    )
+    except Exception:
+        return False
 
 
 # Webhook configuration
