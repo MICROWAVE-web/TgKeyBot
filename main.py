@@ -10,6 +10,7 @@ import traceback
 
 import redis.asyncio as redis
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram import types
 from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
 from aiogram.exceptions import TelegramBadRequest
@@ -37,11 +38,13 @@ alert_lock = asyncio.Lock()
 
 API_TOKEN = config('API_TOKEN')
 CHANNELS = config('CHANNELS').split(',')
+PROXY_URL = config('PROXY_URL', default='http://l5w2JltkpA:44bDgRHr4Y@158.160.125.163:12389')
 
 # Redis для антиспама
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 
-bot = Bot(token=API_TOKEN)
+bot_session = AiohttpSession(proxy=PROXY_URL) if PROXY_URL else AiohttpSession()
+bot = Bot(token=API_TOKEN, session=bot_session)
 dp = Dispatcher()
 
 keys_file = config('KEYS_FILENAME')
