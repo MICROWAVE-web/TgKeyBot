@@ -38,7 +38,7 @@ alert_lock = asyncio.Lock()
 
 API_TOKEN = config('API_TOKEN')
 CHANNELS = config('CHANNELS').split(',')
-PROXY_URL = config('PROXY_URL', default='http://l5w2JltkpA:44bDgRHr4Y@158.160.125.163:12389')
+PROXY_URL = config('PROXY_URL', default='http://D6yNZmDgN8:69GKBevEfk@195.133.67.166:30618')
 
 # Redis для антиспама
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
