@@ -349,6 +349,11 @@ active_processes = set()  # Используем set для хранения ID 
 
 
 @dp.callback_query(F.data == 'subchennel')
+async def check_subscribe_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    await check_subscribe(callback.message)
+
+
 @dp.message(CommandStart())
 async def check_subscribe(message: types.Message, command: CommandObject = None):
     user_id = str(message.from_user.id)
@@ -588,44 +593,78 @@ WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 SSL_CERT = config('SSL_CERT', default='webhook.pem')
 SSL_KEY = config('SSL_KEY', default='webhook.key')
 WEBHOOK_PORT = int(config('WEBHOOK_PORT', default=8443))
+# Сертификат нужен только при self-signed SSL на webhook URL.
+# За nginx с Let's Encrypt оставьте false.
+WEBHOOK_USE_CERTIFICATE = config('WEBHOOK_USE_CERTIFICATE', default='false').lower() == 'true'
+# false — если nginx проксирует на бота по HTTP (типичная схема).
+WEBHOOK_USE_SSL = config('WEBHOOK_USE_SSL', default='false').lower() == 'true'
 
 
 async def on_startup(app):
     await init_redis()
     await load_keys_to_redis()
-    cert = FSInputFile(SSL_CERT)
-    await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True, certificate=cert)
 
+    webhook_kwargs = {'drop_pending_updates': True}
+    if WEBHOOK_USE_CERTIFICATE and os.path.isfile(SSL_CERT):
+        webhook_kwargs['certificate'] = FSInputFile(SSL_CERT)
+
+    await bot.set_webhook(WEBHOOK_URL, **webhook_kwargs)
     logging.info(f"Webhook set to {WEBHOOK_URL}")
+
+    webhook_info = await bot.get_webhook_info()
+    logging.info(
+        "Webhook status: pending=%s, last_error=%s",
+        webhook_info.pending_update_count,
+        webhook_info.last_error_message or 'none',
+    )
 
 
 async def on_shutdown(app):
     await bot.delete_webhook()
-    logging.info("Webhook removed")
+    if redis_client:
+        await redis_client.aclose()
+    await bot.session.close()
+    logging.info("Webhook removed, connections closed")
 
 
 async def handle_webhook(request):
-    update = await request.json()
-    update = types.Update(**update)
-    await dp.feed_update(bot, update)
+    try:
+        update = await request.json()
+        update = types.Update(**update)
+        await dp.feed_update(bot, update)
+    except Exception:
+        logging.exception("Failed to process webhook update")
+        return web.Response(status=500)
     return web.Response()
+
+
+async def health_check(_request):
+    return web.Response(text='ok')
 
 
 def main():
     app = web.Application()
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
+    app.router.add_get('/health', health_check)
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
 
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ssl_context.load_cert_chain(SSL_CERT, SSL_KEY)
+    run_kwargs = {
+        'host': '0.0.0.0',
+        'port': WEBHOOK_PORT,
+    }
+    if WEBHOOK_USE_SSL:
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_context.load_cert_chain(SSL_CERT, SSL_KEY)
+        run_kwargs['ssl_context'] = ssl_context
 
-    web.run_app(
-        app,
-        host='0.0.0.0',
-        port=WEBHOOK_PORT,
-        ssl_context=ssl_context
+    logging.info(
+        "Starting webhook server on %s:%s (ssl=%s)",
+        run_kwargs['host'],
+        WEBHOOK_PORT,
+        WEBHOOK_USE_SSL,
     )
+    web.run_app(app, **run_kwargs)
 
 
 if __name__ == '__main__':
